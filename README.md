@@ -39,18 +39,19 @@ Asharvi Admin is a React + Vite single-page application prepared for GitHub Page
    npm run preview
    ```
 
-## Deployment (GitHub Pages)
+## CI/CD & Deployment
+- Pull requests into `main` trigger the CI workflow (`.github/workflows/ci-cd.yml`) to run `npm ci`, optional `lint`/`test` scripts (via `--if-present`), and `npm run build`, then upload the `dist/` artifact.
+- Pushes/merges to `main` rerun CI and deploy the built `dist/` to the `gh-pages` branch via GitHub Actions (`peaceiris/actions-gh-pages@v4`) using the repo token with `force_orphan` to keep history clean.
+- The Vite base path is already `/asharvi-admin/`; builds published to `gh-pages` honor that path.
 
-This project uses the `gh-pages` package to publish `dist/` to the `gh-pages` branch.
+### GitHub Pages setup (one-time)
+1. Repository **Settings → Pages → Build and deployment → Source: Deploy from a branch**.
+2. Branch: **`gh-pages`**; Folder: **`/ (root)`**.
 
-```bash
-npm run deploy
-```
+### Deployed URL
+The site is served from `https://<org>.github.io/asharvi-admin/`.
 
-Notes:
-- Ensure your repository’s Pages settings point to the `gh-pages` branch (root).
-- `vite.config.js` sets `base: '/asharvi-admin/'`, and React Router uses `basename="/asharvi-admin"`.
-- GitHub Pages SPA refresh support is handled via `public/404.html` and the redirect helper in `index.html`.
+> Manual deploy remains available via `npm run deploy`, which publishes `dist/` to the `gh-pages` branch.
 
 ## Application Layout (Work 0)
 - Persistent left navigation (Dashboard, Courses, Settings)
