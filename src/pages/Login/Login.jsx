@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ENVIRONMENTS } from '../../config/environment';
 import styles from './Login.module.css';
+import { mapApiErrorToDisplay } from '../../api/errors';
 
 const LoginPage = () => {
   const { login, environment, setEnvironment, isLoading } = useAuth();
@@ -23,7 +24,8 @@ const LoginPage = () => {
       await login(email, password);
       navigate(redirectTo, { replace: true });
     } catch (err) {
-      setError(err?.message || 'Login failed. Please try again.');
+      const friendly = mapApiErrorToDisplay(err, { resourceLabel: 'login' });
+      setError(friendly.description);
     } finally {
       setSubmitting(false);
     }

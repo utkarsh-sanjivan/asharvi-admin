@@ -1,12 +1,5 @@
-class ApiError extends Error {
-  constructor({ status, code, message, details }) {
-    super(message || 'Request failed');
-    this.name = 'ApiError';
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
+import { ApiError, RateLimitError, normalizeApiError } from './errors';
+import { buildRequestHeaders, getUserAgent } from './headers';
 
 const parseJsonSafely = async (response) => {
   const contentType = response.headers.get('content-type') || '';
@@ -20,31 +13,19 @@ const parseJsonSafely = async (response) => {
   }
 };
 
-const normalizeError = (response, data) => {
-  const retryAfter = response.headers?.get('Retry-After');
-  const base = {
-    status: response.status,
-    code: data?.error?.code || response.status,
-    message: data?.error?.message || data?.message || response.statusText || 'Request failed',
-    details: data?.error?.details || data?.details,
-  };
-
-  if (response.status === 429) {
-    const retryNote = retryAfter ? ` Please retry after ${retryAfter} seconds.` : '';
-    base.message = 'Too many requests. ' + (data?.error?.message || retryNote || 'Please try again soon.');
-  }
-
-  return new ApiError(base);
-};
-
-const makeRequest = async (baseUrl, path, { method = 'GET', body, headers = {}, getAccessToken } = {}) => {
+const makeRequest = async (
+  baseUrl,
+  path,
+  { method = 'GET', body, headers = {}, getAccessToken, environment, onApiError } = {}
+) => {
   const url = path.startsWith('http') ? path : `${baseUrl}${path}`;
   const token = getAccessToken?.();
+  const standardHeaders = buildRequestHeaders({ environment, userAgent: getUserAgent() });
 
   const init = {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      ...standardHeaders,
       ...headers,
     },
     credentials: 'include',
@@ -62,10 +43,14 @@ const makeRequest = async (baseUrl, path, { method = 'GET', body, headers = {}, 
   const data = await parseJsonSafely(response);
 
   if (!response.ok) {
-    throw normalizeError(response, data);
+    const normalizedError = normalizeApiError(response, data);
+    if (normalizedError instanceof ApiError && [401, 403, 429].includes(normalizedError.status)) {
+      onApiError?.(normalizedError, path);
+    }
+    throw normalizedError;
   }
 
   return { data, status: response.status, headers: response.headers };
 };
 
-export { ApiError, makeRequest };
+export { ApiError, RateLimitError, makeRequest };

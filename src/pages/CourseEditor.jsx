@@ -49,6 +49,11 @@ import { getCookie } from '../utils/cookies';
 import { createCoursesApi } from '../api/courses';
 import { useAuth } from '../auth/AuthContext';
 import FileUpload from '../components/FileUpload/FileUpload';
+import GlobalErrorBanner from '../components/GlobalErrorBanner/GlobalErrorBanner';
+import { mapApiErrorToDisplay } from '../api/errors';
+import { RateLimitError } from '../api/request';
+import useRateLimitCountdown from '../hooks/useRateLimitCountdown';
+import { logEvent } from '../features/diagnostics/diagnosticsStore';
 import {
   ALLOWED_ATTACHMENT_EXTENSIONS,
   ATTACHMENT_MAX_BYTES,
@@ -615,7 +620,7 @@ const CourseEditorPage = ({ environment }) => {
   const [course, setCourse] = useState(null);
   const [initialCourse, setInitialCourse] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
-  const [error, setError] = useState(null);
+  const [errorNotice, setErrorNotice] = useState(null);
   const [saveState, setSaveState] = useState('idle');
   const [dirty, setDirty] = useState(false);
   const [replicateOpen, setReplicateOpen] = useState(false);
@@ -628,6 +633,28 @@ const CourseEditorPage = ({ environment }) => {
   const [attachmentUploads, setAttachmentUploads] = useState({});
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
   const saveTimeoutRef = useRef();
+  const [rateLimitError, setRateLimitError] = useState(null);
+  const [rateLimitToast, setRateLimitToast] = useState(null);
+  const rateLimitCountdown = useRateLimitCountdown();
+
+  const resetRateLimit = () => {
+    setRateLimitError(null);
+    rateLimitCountdown.reset();
+  };
+
+  const handleApiError = (err, resourceLabel, retryAction) => {
+    const friendly = mapApiErrorToDisplay(err, { resourceLabel });
+    if (err instanceof RateLimitError || err?.status === 429) {
+      setRateLimitError(err);
+      rateLimitCountdown.start(err?.retryAfterMs);
+      if (retryAction) {
+        setRateLimitToast({ message: friendly.description, action: retryAction });
+      }
+    } else {
+      setErrorNotice(friendly);
+    }
+    return friendly;
+  };
 
   const refreshDirtyState = (nextCourse, initialOverride) => {
     const errors = computeVideoErrors(nextCourse);
@@ -652,7 +679,7 @@ const CourseEditorPage = ({ environment }) => {
   const showToast = (message, severity = 'info') => setToast({ open: true, message, severity });
 
   const loadCourse = async () => {
-    setError(null);
+    setErrorNotice(null);
     try {
       const data = await api.getCourse(courseId);
       const normalized = normalizeCourse(data);
@@ -660,8 +687,9 @@ const CourseEditorPage = ({ environment }) => {
       setSaveState('idle');
       setAttachmentUploads({});
       setThumbnailUpload({ status: 'idle', progress: 0, error: '' });
+      resetRateLimit();
     } catch (err) {
-      setError(err.message || 'Failed to load course');
+      handleApiError(err, 'course', loadCourse);
     }
   };
 
@@ -691,7 +719,11 @@ const CourseEditorPage = ({ environment }) => {
     const videoIssues = computeVideoErrors(candidate);
     if (Object.keys(videoIssues).length > 0) {
       setVideoErrors(videoIssues);
-      setError('Please fix video URL validation errors before saving.');
+      setErrorNotice(
+        mapApiErrorToDisplay(new Error('Please fix video URL validation errors before saving.'), {
+          resourceLabel: 'validation',
+        })
+      );
       setSaveState('error');
       return false;
     }
@@ -707,7 +739,7 @@ const CourseEditorPage = ({ environment }) => {
       setSaveState('saved');
       return true;
     } catch (err) {
-      setError(err.message || 'Failed to save');
+      handleApiError(err, 'save', () => triggerSave(candidate));
       setSaveState('error');
       return false;
     }
@@ -750,12 +782,9 @@ const CourseEditorPage = ({ environment }) => {
             <p className={styles.subtitle}>Edit course details and curriculum.</p>
           </div>
         </div>
-        {error ? (
+        {errorNotice ? (
           <Stack spacing={2}>
-            <Alert severity="error">{error}</Alert>
-            <Button variant="outlined" onClick={loadCourse} startIcon={<RefreshIcon />}>
-              Retry
-            </Button>
+            <GlobalErrorBanner error={errorNotice} onRetry={loadCourse} onClose={() => setErrorNotice(null)} />
           </Stack>
         ) : (
           <Typography variant="h6">Loading course...</Typography>
@@ -767,30 +796,69 @@ const CourseEditorPage = ({ environment }) => {
   const manualSave = () => triggerSave();
 
   const handlePublish = async () => {
+    const confirmed = window.confirm(
+      environment === ENVIRONMENTS.production
+        ? 'Publish in production? Students will see this immediately.'
+        : 'Publish this course?'
+    );
+    if (!confirmed) return;
     const saved = await triggerSave();
     if (saved === false) return;
-    await api.publishCourse(courseId);
-    loadCourse();
+    try {
+      await api.publishCourse(courseId);
+      logEvent('COURSE_PUBLISH', { id: courseId });
+      loadCourse();
+    } catch (err) {
+      handleApiError(err, 'publish', handlePublish);
+    }
   };
 
   const handleArchive = async () => {
+    const confirmed = window.confirm(
+      environment === ENVIRONMENTS.production
+        ? 'Archive in production? Active students will lose access.'
+        : 'Archive this course?'
+    );
+    if (!confirmed) return;
     const saved = await triggerSave();
     if (saved === false) return;
-    await api.archiveCourse(courseId);
-    loadCourse();
+    try {
+      await api.archiveCourse(courseId);
+      logEvent('COURSE_ARCHIVE', { id: courseId });
+      loadCourse();
+    } catch (err) {
+      handleApiError(err, 'archive', handleArchive);
+    }
   };
 
   const handleDelete = async () => {
+    if (environment === ENVIRONMENTS.production) {
+      const typed = window.prompt(`Delete is irreversible. Type the slug "${course?.slug}" to confirm deletion.`);
+      if (typed !== course?.slug) {
+        setErrorNotice(
+          mapApiErrorToDisplay(new Error('Deletion cancelled. Confirmation text did not match slug.'), {
+            resourceLabel: 'delete confirmation',
+          })
+        );
+        return;
+      }
+    } else {
+      const confirmed = window.confirm('Delete this course?');
+      if (!confirmed) return;
+    }
+
     try {
       await api.deleteCourse(courseId);
+      logEvent('COURSE_DELETE', { id: courseId });
       navigate('/courses');
     } catch (err) {
-      setError(err.message || 'Delete failed');
+      handleApiError(err, 'delete', handleDelete);
     }
   };
 
   const handleThumbnailUpload = async (file) => {
     if (!file) return;
+    logEvent('UPLOAD_START', { type: 'thumbnail', name: file.name });
     setThumbnailUpload({ status: 'uploading', progress: 0, error: '' });
     try {
       const { url } = await uploadThumbnail(file, {
@@ -814,14 +882,22 @@ const CourseEditorPage = ({ environment }) => {
           updateCourseWithInitial(nextCourseState, nextInitial);
         }
       } catch (persistError) {
-        setError(persistError.message || 'Failed to persist thumbnail');
+        handleApiError(persistError, 'thumbnail update');
       }
 
       setThumbnailUpload({ status: 'success', progress: 100, error: '' });
+      logEvent('UPLOAD_SUCCESS', { type: 'thumbnail' });
       showToast('Thumbnail uploaded', 'success');
     } catch (err) {
-      const message = normalizeUploadError(err, THUMBNAIL_MAX_BYTES).message;
+      const normalized = normalizeUploadError(err, THUMBNAIL_MAX_BYTES);
+      const message = normalized.message;
       setThumbnailUpload({ status: 'error', progress: 0, error: message });
+      if (err?.status === 429) {
+        handleApiError(err, 'thumbnail upload', () => handleThumbnailUpload(file));
+      } else {
+        setErrorNotice(mapApiErrorToDisplay(normalized, { resourceLabel: 'thumbnail upload' }));
+      }
+      logEvent('UPLOAD_FAIL', { type: 'thumbnail', status: err?.status });
       showToast(message, 'error');
     }
   };
@@ -842,7 +918,7 @@ const CourseEditorPage = ({ environment }) => {
       }
       showToast('Thumbnail removed', 'info');
     } catch (err) {
-      setError(err.message || 'Failed to remove thumbnail');
+      setErrorNotice(mapApiErrorToDisplay(err, { resourceLabel: 'remove thumbnail' }));
       showToast(err.message || 'Failed to remove thumbnail', 'error');
     }
   };
@@ -861,6 +937,7 @@ const CourseEditorPage = ({ environment }) => {
         ...prev,
         [lessonId]: [...(prev[lessonId] || []), { id: uploadId, name: file.name, progress: 0, status: 'uploading' }],
       }));
+      logEvent('UPLOAD_START', { type: 'attachment', name: file.name });
       try {
         const { url } = await uploadAttachment(file, {
           environment,
@@ -890,15 +967,23 @@ const CourseEditorPage = ({ environment }) => {
             updateCourseWithInitial(nextCourseState, nextInitial);
           }
         } catch (persistError) {
-          setError(persistError.message || 'Failed to save attachment to lesson');
+          setErrorNotice(mapApiErrorToDisplay(persistError, { resourceLabel: 'attachment save' }));
           showToast(persistError.message || 'Failed to save attachment to lesson', 'error');
         }
 
         updateAttachmentUpload(lessonId, uploadId, { status: 'success', progress: 100 });
+        logEvent('UPLOAD_SUCCESS', { type: 'attachment', name: file.name });
         showToast('Attachment uploaded', 'success');
       } catch (err) {
-        const message = normalizeUploadError(err, ATTACHMENT_MAX_BYTES).message;
+        const normalized = normalizeUploadError(err, ATTACHMENT_MAX_BYTES);
+        const message = normalized.message;
         updateAttachmentUpload(lessonId, uploadId, { status: 'error', error: message, progress: 0 });
+        if (err?.status === 429) {
+          handleApiError(err, 'attachment upload', () => handleUploadAttachments(lessonId, [file]));
+        } else {
+          setErrorNotice(mapApiErrorToDisplay(normalized, { resourceLabel: 'attachment upload' }));
+        }
+        logEvent('UPLOAD_FAIL', { type: 'attachment', name: file.name, status: err?.status });
         showToast(message, 'error');
       }
     }
@@ -928,7 +1013,7 @@ const CourseEditorPage = ({ environment }) => {
       }
       showToast('Attachment removed', 'info');
     } catch (err) {
-      setError(err.message || 'Failed to remove attachment');
+      setErrorNotice(mapApiErrorToDisplay(err, { resourceLabel: 'remove attachment' }));
       showToast(err.message || 'Failed to remove attachment', 'error');
     }
   };
@@ -941,11 +1026,13 @@ const CourseEditorPage = ({ environment }) => {
         getAccessToken: () => getCookie('access_token'),
         authPaths: getAuthConfig(),
         onAuthFailure: () => {},
+        environment: env,
       });
       const list = await createCoursesApi(client).listCourses({ page: 1, pageSize: 20, search });
       setReplicateList(list.items || []);
+      resetRateLimit();
     } catch (err) {
-      setError(err.message || 'Failed to load source courses');
+      handleApiError(err, 'replication list', () => fetchReplicate(env, search));
     } finally {
       setIsReplicateLoading(false);
     }
@@ -961,6 +1048,7 @@ const CourseEditorPage = ({ environment }) => {
     const transformed = applyReplication(sourceCourse);
     const merged = { ...course, ...transformed, id: course.id };
     updateCourseState(merged);
+    logEvent('COURSE_REPLICATE', { sourceId: sourceCourse?.id, sourceEnv: replicateEnv, targetId: course?.id });
     setReplicateOpen(false);
   };
 
@@ -993,9 +1081,32 @@ const CourseEditorPage = ({ environment }) => {
         </Stack>
       </div>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
+      {errorNotice && (
+        <GlobalErrorBanner error={errorNotice} onRetry={loadCourse} onClose={() => setErrorNotice(null)} />
+      )}
+      {rateLimitError && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              disabled={!rateLimitCountdown.canRetry}
+              onClick={() => {
+                if (rateLimitCountdown.canRetry) {
+                  resetRateLimit();
+                  loadCourse();
+                }
+              }}
+            >
+              {rateLimitCountdown.canRetry
+                ? 'Retry now'
+                : `Retry in ${rateLimitCountdown.secondsRemaining || 1}s`}
+            </Button>
+          }
+        >
+          {rateLimitError?.message || 'Rate limited. Please retry shortly.'}
         </Alert>
       )}
 
@@ -1057,6 +1168,38 @@ const CourseEditorPage = ({ environment }) => {
         onEnvChange={setReplicateEnv}
         onSearch={setReplicateSearch}
       />
+
+      <Snackbar
+        open={!!rateLimitToast}
+        autoHideDuration={6000}
+        onClose={() => setRateLimitToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity="warning"
+          variant="filled"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              disabled={!rateLimitCountdown.canRetry}
+              onClick={() => {
+                const retry = rateLimitToast?.action;
+                if (retry && rateLimitCountdown.canRetry) {
+                  retry();
+                  setRateLimitToast(null);
+                }
+              }}
+            >
+              {rateLimitCountdown.canRetry
+                ? 'Retry'
+                : `Retry in ${rateLimitCountdown.secondsRemaining || 1}s`}
+            </Button>
+          }
+        >
+          {rateLimitToast?.message || 'Rate limited. Please retry in a moment.'}
+        </Alert>
+      </Snackbar>
 
       <Snackbar
         open={toast.open}

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Grid, IconButton, Pagination, Stack, Tooltip, Typography } from '@mui/material';
+import { Alert, Button, Grid, IconButton, Pagination, Snackbar, Stack, Tooltip, Typography } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useNavigate } from 'react-router-dom';
@@ -10,6 +10,12 @@ import CourseSkeletonGrid from '../components/courses/CourseSkeletonGrid';
 import EmptyState from '../components/courses/EmptyState';
 import CourseDrawer from '../components/courses/CourseDrawer';
 import useCoursesApi from '../hooks/useCoursesApi';
+import { mapApiErrorToDisplay } from '../api/errors';
+import { RateLimitError } from '../api/request';
+import GlobalErrorBanner from '../components/GlobalErrorBanner/GlobalErrorBanner';
+import useRateLimitCountdown from '../hooks/useRateLimitCountdown';
+import { logEvent } from '../features/diagnostics/diagnosticsStore';
+import { ENVIRONMENTS } from '../config/environment';
 
 const CoursesPage = ({ environment }) => {
   const api = useCoursesApi();
@@ -18,19 +24,30 @@ const CoursesPage = ({ environment }) => {
   const [courses, setCourses] = useState([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [errorNotice, setErrorNotice] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [rateLimitError, setRateLimitError] = useState(null);
+  const [rateLimitToast, setRateLimitToast] = useState(null);
+  const rateLimitCountdown = useRateLimitCountdown();
 
   const loadCourses = async () => {
     setIsLoading(true);
-    setError(null);
+    setErrorNotice(null);
     try {
       const data = await api.listCourses(filters);
       setCourses(data.items || []);
       setTotal(data.total || 0);
+      setRateLimitError(null);
+      rateLimitCountdown.reset();
     } catch (err) {
-      setError(err.message || 'Failed to load courses');
+      const friendly = mapApiErrorToDisplay(err, { resourceLabel: 'courses' });
+      if (err instanceof RateLimitError) {
+        setRateLimitError(err);
+        rateLimitCountdown.start(err.retryAfterMs);
+      } else {
+        setErrorNotice(friendly);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -49,13 +66,109 @@ const CoursesPage = ({ environment }) => {
     try {
       const payload = { title: 'Untitled course', status: 'draft', visibility: 'unlisted' };
       const created = await api.createCourse(payload);
+      logEvent('COURSE_CREATE', { id: created?.id });
       navigate(`/courses/${created.id}`);
     } catch (err) {
-      setError(err.message || 'Failed to create course');
+      const friendly = mapApiErrorToDisplay(err, { resourceLabel: 'course creation' });
+      if (err instanceof RateLimitError) {
+        setRateLimitError(err);
+        rateLimitCountdown.start(err.retryAfterMs);
+        setRateLimitToast({ message: friendly.description, action: handleCreate });
+      } else {
+        setErrorNotice(friendly);
+      }
     }
   };
 
   const pageCount = useMemo(() => Math.ceil((total || 0) / (filters.pageSize || 12)), [total, filters.pageSize]);
+
+  const publishSelectedCourse = async () => {
+    if (!selected) return;
+    const confirmed = window.confirm(
+      environment === ENVIRONMENTS.production
+        ? 'Publish in production? Students will see this immediately.'
+        : 'Publish this course?'
+    );
+    if (!confirmed) return;
+    try {
+      await api.publishCourse(selected.id);
+      logEvent('COURSE_PUBLISH', { id: selected.id });
+      loadCourses();
+    } catch (err) {
+      const friendly = mapApiErrorToDisplay(err, { resourceLabel: 'publish' });
+      if (err instanceof RateLimitError) {
+        setRateLimitError(err);
+        rateLimitCountdown.start(err.retryAfterMs);
+        setRateLimitToast({ message: friendly.description, action: publishSelectedCourse });
+      } else {
+        setErrorNotice(friendly);
+      }
+    }
+  };
+
+  const archiveSelectedCourse = async () => {
+    if (!selected) return;
+    const confirmed = window.confirm(
+      environment === ENVIRONMENTS.production
+        ? 'Archive in production? Active students will lose access.'
+        : 'Archive this course?'
+    );
+    if (!confirmed) return;
+    try {
+      await api.archiveCourse(selected.id);
+      logEvent('COURSE_ARCHIVE', { id: selected.id });
+      loadCourses();
+    } catch (err) {
+      const friendly = mapApiErrorToDisplay(err, { resourceLabel: 'archive' });
+      if (err instanceof RateLimitError) {
+        setRateLimitError(err);
+        rateLimitCountdown.start(err.retryAfterMs);
+        setRateLimitToast({ message: friendly.description, action: archiveSelectedCourse });
+      } else {
+        setErrorNotice(friendly);
+      }
+    }
+  };
+
+  const deleteSelectedCourse = async () => {
+    if (!selected) return;
+    if (environment === ENVIRONMENTS.production) {
+      const typed = window.prompt(
+        `Delete in production is irreversible.\nType the slug "${selected.slug}" to confirm deletion.`
+      );
+      if (typed !== selected.slug) {
+        setErrorNotice(
+          mapApiErrorToDisplay(new Error('Deletion cancelled. Confirmation text did not match slug.'), {
+            resourceLabel: 'delete confirmation',
+          })
+        );
+        return;
+      }
+    } else {
+      const confirmed = window.confirm('Delete this course?');
+      if (!confirmed) return;
+    }
+    try {
+      await api.deleteCourse(selected.id);
+      logEvent('COURSE_DELETE', { id: selected.id });
+      setDrawerOpen(false);
+      loadCourses();
+    } catch (err) {
+      const friendly =
+        err?.status === 409
+          ? mapApiErrorToDisplay(new Error('Cannot delete published course. Please archive instead.'), {
+              resourceLabel: 'delete',
+            })
+          : mapApiErrorToDisplay(err, { resourceLabel: 'delete' });
+      if (err instanceof RateLimitError) {
+        setRateLimitError(err);
+        rateLimitCountdown.start(err.retryAfterMs);
+        setRateLimitToast({ message: friendly.description, action: deleteSelectedCourse });
+      } else {
+        setErrorNotice(friendly);
+      }
+    }
+  };
 
   return (
     <div className={styles.page}>
@@ -88,7 +201,29 @@ const CoursesPage = ({ environment }) => {
             }
           }}
         />
-        {error && <Alert severity="error">{error}</Alert>}
+        <GlobalErrorBanner error={errorNotice} onRetry={loadCourses} onClose={() => setErrorNotice(null)} />
+        {rateLimitError && (
+          <Alert
+            severity="warning"
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                disabled={!rateLimitCountdown.canRetry}
+                onClick={() => {
+                  rateLimitCountdown.reset();
+                  loadCourses();
+                }}
+              >
+                {rateLimitCountdown.canRetry
+                  ? 'Retry now'
+                  : `Retry in ${rateLimitCountdown.secondsRemaining || 1}s`}
+              </Button>
+            }
+          >
+            {rateLimitError?.message || 'Rate limit reached. Please wait before retrying.'}
+          </Alert>
+        )}
       </Stack>
 
       {isLoading ? (
@@ -120,57 +255,42 @@ const CoursesPage = ({ environment }) => {
         course={selected}
         onClose={() => setDrawerOpen(false)}
         onEdit={() => selected && navigate(`/courses/${selected.id}`)}
-        onPublish={async () => {
-          if (!selected) return;
-          const confirmed = window.confirm(
-            environment === 'production'
-              ? 'Publish in production? Students will see this immediately.'
-              : 'Publish this course?'
-          );
-          if (!confirmed) return;
-          try {
-            await api.publishCourse(selected.id);
-            loadCourses();
-          } catch (err) {
-            setError(err.message || 'Publish failed');
-          }
-        }}
-        onArchive={async () => {
-          if (!selected) return;
-          const confirmed = window.confirm(
-            environment === 'production'
-              ? 'Archive in production? Active students will lose access.'
-              : 'Archive this course?'
-          );
-          if (!confirmed) return;
-          try {
-            await api.archiveCourse(selected.id);
-            loadCourses();
-          } catch (err) {
-            setError(err.message || 'Archive failed');
-          }
-        }}
-        onDelete={async () => {
-          if (!selected) return;
-          const confirmed = window.confirm(
-            environment === 'production'
-              ? 'Delete in production is irreversible. Continue?'
-              : 'Delete this course?'
-          );
-          if (!confirmed) return;
-          try {
-            await api.deleteCourse(selected.id);
-            setDrawerOpen(false);
-            loadCourses();
-          } catch (err) {
-            if (err.status === 409) {
-              setError('Cannot delete published course. Please archive instead.');
-            } else {
-              setError(err.message || 'Delete failed');
-            }
-          }
-        }}
+        onPublish={publishSelectedCourse}
+        onArchive={archiveSelectedCourse}
+        onDelete={deleteSelectedCourse}
       />
+
+      <Snackbar
+        open={!!rateLimitToast}
+        autoHideDuration={6000}
+        onClose={() => setRateLimitToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity="warning"
+          variant="filled"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              disabled={!rateLimitCountdown.canRetry}
+              onClick={() => {
+                const retry = rateLimitToast?.action;
+                if (retry && rateLimitCountdown.canRetry) {
+                  retry();
+                  setRateLimitToast(null);
+                }
+              }}
+            >
+              {rateLimitCountdown.canRetry
+                ? 'Retry'
+                : `Retry in ${rateLimitCountdown.secondsRemaining || 1}s`}
+            </Button>
+          }
+        >
+          {rateLimitToast?.message || 'Rate limited. Please retry in a moment.'}
+        </Alert>
+      </Snackbar>
     </div>
   );
 };
