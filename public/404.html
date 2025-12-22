@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Redirecting...</title>
+    <script type="text/javascript">
+      const segmentCount = 1;
+      const pathSegmentsToKeep = window.location.pathname.split('/').slice(0, segmentCount + 1).join('/');
+      const query = window.location.search.slice(1);
+      const redirectPath = window.location.pathname.slice(pathSegmentsToKeep.length) + (query ? `?${query}` : '') + window.location.hash;
+      const destination = `${pathSegmentsToKeep}/index.html?p=${redirectPath.replace(/&/g, '~and~')}`;
+      window.location.replace(destination);
+    </script>
+  </head>
+  <body></body>
+</html>

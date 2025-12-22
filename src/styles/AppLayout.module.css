@@ -1,0 +1,47 @@
+.appShell {
+  display: flex;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+}
+
+.mainContent {
+  flex: 1;
+  padding: 24px;
+}
+
+.contentInner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.productionChip {
+  margin-left: 12px;
+}
+
+.drawerPaper {
+  border-right: 1px solid #e5e7eb;
+}
+
+.navHeader {
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.navList {
+  margin-top: 8px;
+}
+
+.toolbarSpacer {
+  min-height: 64px;
+}
+
+@media (max-width: 900px) {
+  .mainContent {
+    padding: 16px;
+  }
+
+  .contentInner {
+    padding: 12px;
+  }
+}
