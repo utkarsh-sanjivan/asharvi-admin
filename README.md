@@ -1,6 +1,6 @@
-# Asharvi Admin (Work 0)
+# Asharvi Admin (Work 1 + 2)
 
-Asharvi Admin is a React + Vite single-page application prepared for GitHub Pages hosting under `/asharvi-admin/`. This milestone delivers the app shell, routing, environment selector, and deployment scaffolding.
+Asharvi Admin is a React + Vite single-page application prepared for GitHub Pages hosting under `/asharvi-admin/`. Work 1 + 2 adds authenticated access, environment-aware API calls with refresh-on-401, and protected routes for admin-only areas.
 
 ## Tech Stack
 - React (JavaScript) + Vite
@@ -64,17 +64,39 @@ Environment variables are centralized in `src/config/environment.js`.
 Available variables (see `.env.example`):
 - `VITE_API_BASE_URL_STAGING`
 - `VITE_API_BASE_URL_PROD`
+- `VITE_AUTH_LOGIN_PATH`
+- `VITE_AUTH_REFRESH_PATH`
+- `VITE_AUTH_LOGOUT_PATH`
+- `VITE_AUTH_ME_PATH`
 
 Utility behaviors:
 - `getApiBaseUrl(env)` returns the base URL for `staging` or `production`.
 - Selected environment persists in `localStorage` as `ASHRAVI_ADMIN_ENV`.
+- Switching environments recreates the API client and re-validates the session; expect to log in per environment.
+
+## Authentication & Sessions
+- Login uses `POST {BASE_URL}{LOGIN_PATH}` with `{ email, password }`.
+- Access tokens are expected in a readable `access_token` cookie; refresh tokens are stored server-side in HttpOnly cookies.
+- All requests send `credentials: "include"` to support refresh flows.
+- On `401`, the API client attempts a single refresh (`POST {REFRESH_PATH}`) and retries the original request once. If refresh fails, the user is logged out locally and redirected to `/login`.
+- Session validation prefers `GET {ME_PATH}` and falls back to decoding JWT claims to extract the `admin` role.
+- Logout calls `{LOGOUT_PATH}` when available, then clears local session state.
+
+> **CORS note:** Your API must allow cross-origin requests with credentials and set cookies for the configured domain. Ensure `Access-Control-Allow-Credentials: true` and appropriate `Access-Control-Allow-Origin` are configured.
+
+## Routing & Access Control
+- `/login` is public.
+- `/dashboard`, `/courses`, and `/settings` are protected by `RequireAuth` (must be logged in) and `RequireAdmin` (must include `admin` role); unauthorized users see a 403 page.
+- Unknown routes inside the shell show a not-found page; unknown routes outside redirect to `/login`.
 
 ## Project Structure
 ```
 ├── public/
 │   └── 404.html          # GitHub Pages SPA fallback
 ├── src/
-│   ├── app/              # App bootstrap and routing
+│   ├── app/              # App bootstrap and routing + route guards
+│   ├── api/              # Fetch wrapper with refresh-and-retry
+│   ├── auth/             # Auth context and helpers
 │   ├── components/       # Layout and shared UI
 │   ├── config/           # Environment utilities
 │   ├── pages/            # Page-level components
@@ -91,5 +113,5 @@ Utility behaviors:
 - `npm run deploy` – build and publish to GitHub Pages (`gh-pages` branch)
 
 ## Notes
-- No real API calls are implemented in Work 0; endpoints are placeholders for future milestones.
+- API calls are environment-aware and include the `Authorization: Bearer <token>` header when the `access_token` cookie is present.
 - Keep the base path `/asharvi-admin/` consistent across hosting and local previews.
