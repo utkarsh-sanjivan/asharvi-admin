@@ -1,0 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+.loginPage {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 20% 20%, #eef2ff 0, rgba(238, 242, 255, 0) 25%),
+    radial-gradient(circle at 80% 0%, #e0f2fe 0, rgba(224, 242, 254, 0) 25%),
+    linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+  padding: 24px;
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+}
+
+.envRow {
+  margin-top: 4px;
+}

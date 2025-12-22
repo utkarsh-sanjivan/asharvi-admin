@@ -2,6 +2,7 @@ import React from 'react';
 import {
   AppBar,
   Box,
+  Button,
   Chip,
   Divider,
   Drawer,
@@ -19,7 +20,8 @@ import {
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import SchoolIcon from '@mui/icons-material/School';
 import SettingsIcon from '@mui/icons-material/Settings';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../auth/AuthContext';
 import { ENVIRONMENTS } from '../../config/environment';
 import styles from '../../styles/AppLayout.module.css';
 
@@ -31,8 +33,15 @@ const navItems = [
   { label: 'Settings', path: '/settings', icon: <SettingsIcon fontSize="small" /> },
 ];
 
-const AppLayout = ({ environment, onEnvironmentChange }) => {
+const AppLayout = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { environment, setEnvironment, logout, hasAdminRole, isAuthenticated } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
 
   return (
     <Box className={styles.appShell}>
@@ -57,7 +66,7 @@ const AppLayout = ({ environment, onEnvironmentChange }) => {
               id="environment-select"
               value={environment}
               label="Environment"
-              onChange={(event) => onEnvironmentChange(event.target.value)}
+              onChange={(event) => setEnvironment(event.target.value)}
             >
               <MenuItem value={ENVIRONMENTS.staging}>Staging</MenuItem>
               <MenuItem value={ENVIRONMENTS.production}>Production</MenuItem>
@@ -71,6 +80,11 @@ const AppLayout = ({ environment, onEnvironmentChange }) => {
               label="Production"
               size="small"
             />
+          )}
+          {isAuthenticated && (
+            <Button onClick={handleLogout} variant="text" color="inherit" sx={{ marginLeft: 2 }}>
+              Logout
+            </Button>
           )}
         </Toolbar>
       </AppBar>
@@ -103,6 +117,7 @@ const AppLayout = ({ environment, onEnvironmentChange }) => {
                 component={Link}
                 to={item.path}
                 selected={isActive}
+                disabled={!hasAdminRole}
                 sx={{ borderRadius: '10px', margin: '4px 12px' }}
               >
                 <ListItemIcon sx={{ minWidth: 36, color: isActive ? 'primary.main' : 'inherit' }}>

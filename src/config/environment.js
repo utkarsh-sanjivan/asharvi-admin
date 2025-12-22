@@ -26,7 +26,7 @@ const setStoredEnvironment = (env) => {
 
 const getApiBaseUrl = (env) => {
   const resolvedEnv = env === ENVIRONMENTS.production ? ENVIRONMENTS.production : ENVIRONMENTS.staging;
-  return API_BASE_URLS[resolvedEnv];
+  return API_BASE_URLS[resolvedEnv] || '';
 };
 
 export { API_BASE_URLS, ENVIRONMENTS, LOCAL_STORAGE_KEY, getApiBaseUrl, getStoredEnvironment, setStoredEnvironment };
