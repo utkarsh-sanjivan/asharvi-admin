@@ -51,12 +51,14 @@ const createApiClient = ({ baseUrl, getAccessToken, onAuthFailure, authPaths }) 
   const get = (path, options) => requestWithRefresh(path, { ...options, method: 'GET' });
   const post = (path, body, options = {}) => requestWithRefresh(path, { ...options, body, method: 'POST' });
   const put = (path, body, options = {}) => requestWithRefresh(path, { ...options, body, method: 'PUT' });
+  const patch = (path, body, options = {}) => requestWithRefresh(path, { ...options, body, method: 'PATCH' });
   const del = (path, options = {}) => requestWithRefresh(path, { ...options, method: 'DELETE' });
 
   return {
     get,
     post,
     put,
+    patch,
     delete: del,
     refresh: () => callRequest(authPaths.refreshPath, { method: 'POST', skipRefresh: true }),
     login: (credentials) => callRequest(authPaths.loginPath, { method: 'POST', body: credentials, skipRefresh: true }),

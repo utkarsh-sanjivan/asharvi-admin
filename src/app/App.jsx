@@ -6,6 +6,7 @@ import RequireAuth from './RequireAuth';
 import AppLayout from '../components/layout/AppLayout';
 import DashboardPage from '../pages/Dashboard';
 import CoursesPage from '../pages/Courses';
+import CourseEditorPage from '../pages/CourseEditor';
 import SettingsPage from '../pages/Settings';
 import LoginPage from '../pages/Login/Login';
 import NotFoundPage from '../pages/NotFound/NotFound';
@@ -38,6 +39,14 @@ const App = () => {
             element={
               <RequireAdmin>
                 <CoursesPage environment={environment} />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="courses/:courseId"
+            element={
+              <RequireAdmin>
+                <CourseEditorPage environment={environment} />
               </RequireAdmin>
             }
           />

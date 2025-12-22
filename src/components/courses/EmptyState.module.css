@@ -1,0 +1,7 @@
+.emptyBox {
+  padding: 32px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 16px;
+  text-align: center;
+  background: #f8fafc;
+}
