@@ -422,8 +422,14 @@ const CourseEditorPage = ({ environment }) => {
   const isSlugValid = course ? slugIsValid(course.slug) : true;
 
   const triggerSave = async (payload) => {
-    if (!dirty) return;
-    if (!isSlugValid) return;
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    if (!dirty) return true;
+    if (!isSlugValid) {
+      setSaveState('error');
+      return false;
+    }
     setSaveState('saving');
     try {
       const saved = await api.updateCourse(courseId, payload || course);
@@ -432,9 +438,11 @@ const CourseEditorPage = ({ environment }) => {
       setInitialCourse(normalized);
       setDirty(false);
       setSaveState('saved');
+      return true;
     } catch (err) {
       setError(err.message || 'Failed to save');
       setSaveState('error');
+      return false;
     }
   };
 
@@ -471,7 +479,22 @@ const CourseEditorPage = ({ environment }) => {
   if (!course) {
     return (
       <div className={styles.page}>
-        <Typography variant="h6">Loading course...</Typography>
+        <div className={styles.header}>
+          <div>
+            <h1 className={styles.title}>Course editor</h1>
+            <p className={styles.subtitle}>Edit course details and curriculum.</p>
+          </div>
+        </div>
+        {error ? (
+          <Stack spacing={2}>
+            <Alert severity="error">{error}</Alert>
+            <Button variant="outlined" onClick={loadCourse} startIcon={<RefreshIcon />}>
+              Retry
+            </Button>
+          </Stack>
+        ) : (
+          <Typography variant="h6">Loading course...</Typography>
+        )}
       </div>
     );
   }
@@ -479,11 +502,15 @@ const CourseEditorPage = ({ environment }) => {
   const manualSave = () => triggerSave();
 
   const handlePublish = async () => {
+    const saved = await triggerSave();
+    if (saved === false) return;
     await api.publishCourse(courseId);
     loadCourse();
   };
 
   const handleArchive = async () => {
+    const saved = await triggerSave();
+    if (saved === false) return;
     await api.archiveCourse(courseId);
     loadCourse();
   };
