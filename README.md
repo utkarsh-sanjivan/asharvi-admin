@@ -68,6 +68,8 @@ Available variables (see `.env.example`):
 - `VITE_AUTH_REFRESH_PATH`
 - `VITE_AUTH_LOGOUT_PATH`
 - `VITE_AUTH_ME_PATH`
+- `VITE_UPLOAD_THUMBNAIL_PATH`
+- `VITE_UPLOAD_ATTACHMENT_PATH`
 
 Utility behaviors:
 - `getApiBaseUrl(env)` returns the base URL for `staging` or `production`.
@@ -83,6 +85,16 @@ Utility behaviors:
 - Logout calls `{LOGOUT_PATH}` when available, then clears local session state.
 
 > **CORS note:** Your API must allow cross-origin requests with credentials and set cookies for the configured domain. Ensure `Access-Control-Allow-Credentials: true` and appropriate `Access-Control-Allow-Origin` are configured.
+
+## Upload configuration (Work 6)
+- Thumbnail uploads call `POST {BASE_URL}{VITE_UPLOAD_THUMBNAIL_PATH || /admin/uploads/thumbnail}` with `multipart/form-data` field `file`.
+- Download lesson attachments call `POST {BASE_URL}{VITE_UPLOAD_ATTACHMENT_PATH || /admin/uploads/attachment}` with `multipart/form-data` field `file`.
+- Both endpoints expect a `200` JSON response shaped as `{ url: "https://..." }`; the returned `url` is stored on the course (`thumbnailUrl`) or lesson (`attachments[]`).
+- Uploads include cookies and an `Authorization: Bearer <access_token>` header when available. On a `401`, the client refreshes the session once and retries the upload.
+- Client-side validation defaults:
+  - Thumbnail: image files only, max size 5 MB.
+  - Attachments (download lessons): pdf, doc, docx, ppt, pptx, xls, xlsx, zip, png, jpg, jpeg; max size 20 MB.
+- UI features: drag-and-drop zones, progress indicators, thumbnail preview with remove, attachment lists with remove, and retry by re-uploading a file.
 
 ## Routing & Access Control
 - `/login` is public.

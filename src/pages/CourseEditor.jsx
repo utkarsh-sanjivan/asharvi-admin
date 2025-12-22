@@ -25,14 +25,19 @@ import {
   ListItem,
   ListItemText,
   CircularProgress,
+  LinearProgress,
+  Paper,
+  Snackbar,
 } from '@mui/material';
-import { unstable_useBlocker as useBlocker, useNavigate, useParams } from 'react-router-dom';
+import { useBlocker, useNavigate, useParams } from 'react-router-dom';
 import SaveIcon from '@mui/icons-material/Save';
 import PublishIcon from '@mui/icons-material/Publish';
 import ArchiveIcon from '@mui/icons-material/Archive';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import styles from '../styles/Page.module.css';
 import useCoursesApi from '../hooks/useCoursesApi';
 import { applyReplication, normalizeCourse, slugIsValid } from '../utils/courses';
@@ -42,13 +47,77 @@ import { getApiBaseUrl, ENVIRONMENTS } from '../config/environment';
 import { getAuthConfig } from '../config/auth';
 import { getCookie } from '../utils/cookies';
 import { createCoursesApi } from '../api/courses';
+import { useAuth } from '../auth/AuthContext';
+import FileUpload from '../components/FileUpload/FileUpload';
+import {
+  ALLOWED_ATTACHMENT_EXTENSIONS,
+  ATTACHMENT_MAX_BYTES,
+  THUMBNAIL_MAX_BYTES,
+  formatBytes,
+  normalizeUploadError,
+  uploadAttachment,
+  uploadThumbnail,
+} from '../features/uploads/uploadApi';
 
 const TabPanel = ({ value, index, children }) => {
   if (value !== index) return null;
   return <Box sx={{ paddingTop: 2 }}>{children}</Box>;
 };
 
-const BasicsTab = ({ course, onChange, slugError }) => {
+const isValidUrl = (value) => {
+  if (!value) return false;
+  try {
+    // eslint-disable-next-line no-new
+    new URL(value);
+    return true;
+  } catch (err) {
+    return false;
+  }
+};
+
+const computeVideoErrors = (course) => {
+  const errors = {};
+  (course?.modules || []).forEach((mod) => {
+    (mod.lessons || []).forEach((lesson) => {
+      if (lesson.type === 'video') {
+        const url = (lesson.content || '').trim();
+        if (!url) {
+          errors[lesson.id] = 'Video URL is required';
+        } else if (!isValidUrl(url)) {
+          errors[lesson.id] = 'Enter a valid video URL';
+        }
+      }
+    });
+  });
+  return errors;
+};
+
+const updateLessonInCourseData = (course, lessonId, updater) => {
+  if (!course) return course;
+  return {
+    ...course,
+    modules: (course.modules || []).map((mod) => ({
+      ...mod,
+      lessons: (mod.lessons || []).map((lesson) => (lesson.id === lessonId ? updater(lesson) : lesson)),
+    })),
+  };
+};
+
+const findLessonInCourse = (course, lessonId) => {
+  if (!course) return null;
+  for (const mod of course.modules || []) {
+    for (const lesson of mod.lessons || []) {
+      if (lesson.id === lessonId) {
+        return lesson;
+      }
+    }
+  }
+  return null;
+};
+
+const BasicsTab = ({ course, onChange, slugError, onThumbnailUpload, onRemoveThumbnail, thumbnailUpload }) => {
+  const thumbnailInputRef = useRef(null);
+
   return (
     <Grid container spacing={2}>
       <Grid item xs={12} md={6}>
@@ -88,13 +157,70 @@ const BasicsTab = ({ course, onChange, slugError }) => {
         />
       </Grid>
       <Grid item xs={12} md={6}>
-        <TextField
-          label="Thumbnail URL"
-          fullWidth
-          value={course.thumbnailUrl || ''}
-          onChange={(e) => onChange({ ...course, thumbnailUrl: e.target.value })}
-          helperText="Upload coming soon"
-        />
+        <Stack spacing={1.5}>
+          <Typography variant="subtitle1" fontWeight={600}>
+            Thumbnail
+          </Typography>
+          <Paper variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden', position: 'relative' }}>
+            {course.thumbnailUrl ? (
+              <Box
+                component="img"
+                src={course.thumbnailUrl}
+                alt="Course thumbnail"
+                sx={{ width: '100%', height: 220, objectFit: 'cover' }}
+              />
+            ) : (
+              <Stack alignItems="center" justifyContent="center" sx={{ height: 220, bgcolor: '#f8fafc' }} spacing={1}>
+                <InsertDriveFileOutlinedIcon color="action" />
+                <Typography variant="body2" color="text.secondary">
+                  No thumbnail uploaded yet
+                </Typography>
+              </Stack>
+            )}
+            {thumbnailUpload?.status === 'uploading' && (
+              <Box sx={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}>
+                <LinearProgress value={thumbnailUpload.progress || 0} variant="determinate" />
+              </Box>
+            )}
+          </Paper>
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => thumbnailInputRef.current?.click()}
+              startIcon={<CloudUploadIcon />}
+            >
+              Upload Thumbnail
+            </Button>
+            {course.thumbnailUrl && (
+              <Button variant="text" color="error" size="small" onClick={onRemoveThumbnail}>
+                Remove
+              </Button>
+            )}
+          </Stack>
+          <FileUpload
+            accept="image/*"
+            allowedExtensions={['png', 'jpg', 'jpeg', 'webp']}
+            maxSize={THUMBNAIL_MAX_BYTES}
+            multiple={false}
+            onFilesSelected={(files) => files[0] && onThumbnailUpload?.(files[0])}
+            helperText={`PNG, JPG up to ${formatBytes(THUMBNAIL_MAX_BYTES)}`}
+            dropLabel="Drag an image here or click to upload"
+            inputRef={thumbnailInputRef}
+            selectedFiles={
+              thumbnailUpload?.status && thumbnailUpload.status !== 'idle'
+                ? [
+                    {
+                      name: course.thumbnailUrl ? 'Thumbnail' : 'New thumbnail',
+                      progress: thumbnailUpload.progress,
+                      status: thumbnailUpload.status,
+                      error: thumbnailUpload.error,
+                    },
+                  ]
+                : []
+            }
+          />
+        </Stack>
       </Grid>
     </Grid>
   );
@@ -165,52 +291,145 @@ const PublishingTab = ({ course }) => (
   </Stack>
 );
 
-const LessonRow = ({ lesson, onChange, onDelete, onMove }) => (
-  <Stack spacing={1} sx={{ border: '1px solid #e5e7eb', borderRadius: 1, padding: 1.5 }}>
-    <Stack direction="row" spacing={1} alignItems="center">
-      <Typography variant="subtitle2">{lesson.title || 'Lesson'}</Typography>
-      <Chip label={lesson.type} size="small" />
-      <Box sx={{ flex: 1 }} />
-      <Button size="small" onClick={() => onMove(-1)}>
-        Up
-      </Button>
-      <Button size="small" onClick={() => onMove(1)}>
-        Down
-      </Button>
-      <Button size="small" color="error" onClick={onDelete}>
-        Delete
-      </Button>
-    </Stack>
-    <TextField
-      label="Lesson title"
-      fullWidth
-      value={lesson.title || ''}
-      onChange={(e) => onChange({ ...lesson, title: e.target.value })}
-    />
-    <FormControl fullWidth>
-      <InputLabel id={`type-${lesson.id}`}>Type</InputLabel>
-      <Select
-        labelId={`type-${lesson.id}`}
-        label="Type"
-        value={lesson.type || 'video'}
-        onChange={(e) => onChange({ ...lesson, type: e.target.value })}
-      >
-        <MenuItem value="video">Video</MenuItem>
-        <MenuItem value="article">Article</MenuItem>
-        <MenuItem value="quiz">Quiz</MenuItem>
-        <MenuItem value="download">Download</MenuItem>
-      </Select>
-    </FormControl>
-    <TextField
-      label="Content / URL"
-      fullWidth
-      value={lesson.content || ''}
-      onChange={(e) => onChange({ ...lesson, content: e.target.value })}
-    />
-  </Stack>
-);
+const LessonRow = ({
+  lesson,
+  onChange,
+  onDelete,
+  onMove,
+  onUploadAttachments,
+  onRemoveAttachment,
+  attachmentUploads = [],
+  videoError,
+}) => {
+  const isDownload = lesson.type === 'download';
+  const isVideo = lesson.type === 'video';
+  const attachments = lesson.attachments || [];
 
-const ModuleCard = ({ module, onChange, onDelete, onAddLesson, onMoveModule, onMoveLesson }) => (
+  return (
+    <Stack spacing={1.5} sx={{ border: '1px solid #e5e7eb', borderRadius: 1, padding: 1.5 }}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Typography variant="subtitle2">{lesson.title || 'Lesson'}</Typography>
+        <Chip label={lesson.type} size="small" />
+        <Box sx={{ flex: 1 }} />
+        <Button size="small" onClick={() => onMove(-1)}>
+          Up
+        </Button>
+        <Button size="small" onClick={() => onMove(1)}>
+          Down
+        </Button>
+        <Button size="small" color="error" onClick={onDelete}>
+          Delete
+        </Button>
+      </Stack>
+      <TextField
+        label="Lesson title"
+        fullWidth
+        value={lesson.title || ''}
+        onChange={(e) => onChange({ ...lesson, title: e.target.value })}
+      />
+      <FormControl fullWidth>
+        <InputLabel id={`type-${lesson.id}`}>Type</InputLabel>
+        <Select
+          labelId={`type-${lesson.id}`}
+          label="Type"
+          value={lesson.type || 'video'}
+          onChange={(e) => onChange({ ...lesson, type: e.target.value })}
+        >
+          <MenuItem value="video">Video</MenuItem>
+          <MenuItem value="article">Article</MenuItem>
+          <MenuItem value="quiz">Quiz</MenuItem>
+          <MenuItem value="download">Download</MenuItem>
+        </Select>
+      </FormControl>
+      {isVideo ? (
+        <TextField
+          label="Video URL"
+          fullWidth
+          value={lesson.content || ''}
+          onChange={(e) => onChange({ ...lesson, content: e.target.value })}
+          error={!!videoError}
+          helperText={videoError || 'Provide a valid video URL'}
+        />
+      ) : (
+        <TextField
+          label={isDownload ? 'Resource description / URL' : 'Content / URL'}
+          fullWidth
+          value={lesson.content || ''}
+          onChange={(e) => onChange({ ...lesson, content: e.target.value })}
+          helperText={isDownload ? 'Optional description or reference link for this download' : ''}
+        />
+      )}
+      {isDownload && (
+        <Stack spacing={1}>
+          <Typography variant="subtitle2">Attachments</Typography>
+          <Stack spacing={1}>
+            {attachments.map((url) => (
+              <Paper key={url} variant="outlined" sx={{ padding: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <InsertDriveFileOutlinedIcon fontSize="small" color="action" />
+                <Typography variant="body2" sx={{ flex: 1 }} noWrap title={url}>
+                  {url}
+                </Typography>
+                <IconButton edge="end" size="small" onClick={() => onRemoveAttachment(url)}>
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </Paper>
+            ))}
+            {attachments.length === 0 && (
+              <Typography variant="body2" color="text.secondary">
+                No attachments yet.
+              </Typography>
+            )}
+          </Stack>
+          <FileUpload
+            label="Upload attachments"
+            accept={ALLOWED_ATTACHMENT_EXTENSIONS.map((ext) => `.${ext}`).join(',')}
+            allowedExtensions={ALLOWED_ATTACHMENT_EXTENSIONS}
+            maxSize={ATTACHMENT_MAX_BYTES}
+            multiple
+            helperText={`PDF, DOC, PPT, XLS, ZIP, PNG, JPG up to ${formatBytes(ATTACHMENT_MAX_BYTES)}`}
+            onFilesSelected={(files) => onUploadAttachments(files)}
+          />
+          {attachmentUploads.length > 0 && (
+            <Stack spacing={0.5}>
+              {attachmentUploads.map((upload) => (
+                <Stack key={upload.id} spacing={0.25}>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between">
+                    <Typography variant="body2">{upload.name}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {upload.status === 'error' ? 'Failed' : upload.status === 'success' ? 'Uploaded' : 'Uploading'}
+                    </Typography>
+                  </Stack>
+                  <LinearProgress
+                    variant={upload.status === 'error' ? 'determinate' : 'determinate'}
+                    value={upload.status === 'error' ? 0 : upload.progress || 0}
+                  />
+                  {upload.error && (
+                    <Typography variant="caption" color="error">
+                      {upload.error}
+                    </Typography>
+                  )}
+                </Stack>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      )}
+    </Stack>
+  );
+};
+
+const ModuleCard = ({
+  module,
+  onChange,
+  onDelete,
+  onAddLesson,
+  onMoveModule,
+  onMoveLesson,
+  onUploadAttachments,
+  onRemoveAttachment,
+  attachmentUploads,
+  videoErrors,
+}) => (
   <Stack spacing={1.5} sx={{ border: '1px solid #e2e8f0', borderRadius: 2, padding: 2, background: '#f8fafc' }}>
     <Stack direction="row" alignItems="center" spacing={1}>
       <Typography variant="h6">{module.title || 'Module'}</Typography>
@@ -255,6 +474,10 @@ const ModuleCard = ({ module, onChange, onDelete, onAddLesson, onMoveModule, onM
             onChange={(updated) => onChange({ ...module, lessons: module.lessons.map((l, i) => (i === idx ? updated : l)) })}
             onDelete={() => onChange({ ...module, lessons: module.lessons.filter((_, i) => i !== idx) })}
             onMove={(delta) => onMoveLesson(idx, delta)}
+            onUploadAttachments={(files) => onUploadAttachments(lesson.id, files)}
+            onRemoveAttachment={(url) => onRemoveAttachment(lesson.id, url)}
+            attachmentUploads={attachmentUploads?.[lesson.id] || []}
+            videoError={videoErrors?.[lesson.id]}
           />
         ))}
       </Stack>
@@ -262,7 +485,7 @@ const ModuleCard = ({ module, onChange, onDelete, onAddLesson, onMoveModule, onM
   </Stack>
 );
 
-const CurriculumTab = ({ course, onChange }) => {
+const CurriculumTab = ({ course, onChange, onUploadAttachments, onRemoveAttachment, attachmentUploads, videoErrors }) => {
   const modules = course.modules || [];
 
   const addModule = () => {
@@ -316,12 +539,23 @@ const CurriculumTab = ({ course, onChange }) => {
                 ...mod,
                 lessons: [
                   ...(mod.lessons || []),
-                  { id: `l-${Date.now()}`, title: 'New lesson', type: 'video', order: (mod.lessons?.length || 0) + 1 },
+                  {
+                    id: `l-${Date.now()}`,
+                    title: 'New lesson',
+                    type: 'video',
+                    order: (mod.lessons?.length || 0) + 1,
+                    attachments: [],
+                    content: '',
+                  },
                 ],
               })
             }
             onMoveModule={(delta) => moveModule(idx, delta)}
             onMoveLesson={(lessonIndex, delta) => moveLesson(idx, lessonIndex, delta)}
+            onUploadAttachments={onUploadAttachments}
+            onRemoveAttachment={onRemoveAttachment}
+            attachmentUploads={attachmentUploads}
+            videoErrors={videoErrors}
           />
         ))}
       </Stack>
@@ -376,6 +610,7 @@ const ReplicateDialog = ({ open, onClose, onSelect, isLoading, courses, sourceEn
 const CourseEditorPage = ({ environment }) => {
   const { courseId } = useParams();
   const api = useCoursesApi();
+  const { apiClient } = useAuth();
   const navigate = useNavigate();
   const [course, setCourse] = useState(null);
   const [initialCourse, setInitialCourse] = useState(null);
@@ -388,17 +623,43 @@ const CourseEditorPage = ({ environment }) => {
   const [replicateList, setReplicateList] = useState([]);
   const [isReplicateLoading, setIsReplicateLoading] = useState(false);
   const [replicateSearch, setReplicateSearch] = useState('');
+  const [videoErrors, setVideoErrors] = useState({});
+  const [thumbnailUpload, setThumbnailUpload] = useState({ status: 'idle', progress: 0, error: '' });
+  const [attachmentUploads, setAttachmentUploads] = useState({});
+  const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
   const saveTimeoutRef = useRef();
+
+  const refreshDirtyState = (nextCourse, initialOverride) => {
+    const errors = computeVideoErrors(nextCourse);
+    setVideoErrors(errors);
+    const baseInitial = initialOverride || initialCourse;
+    setDirty(baseInitial ? !deepEqual(baseInitial, nextCourse) : true);
+  };
+
+  const updateCourseState = (nextCourse) => {
+    setCourse(nextCourse);
+    refreshDirtyState(nextCourse);
+  };
+
+  const updateCourseWithInitial = (nextCourse, nextInitial) => {
+    setCourse(nextCourse);
+    if (nextInitial) {
+      setInitialCourse(nextInitial);
+    }
+    refreshDirtyState(nextCourse, nextInitial);
+  };
+
+  const showToast = (message, severity = 'info') => setToast({ open: true, message, severity });
 
   const loadCourse = async () => {
     setError(null);
     try {
       const data = await api.getCourse(courseId);
       const normalized = normalizeCourse(data);
-      setCourse(normalized);
-      setInitialCourse(normalized);
-      setDirty(false);
+      updateCourseWithInitial(normalized, normalized);
       setSaveState('idle');
+      setAttachmentUploads({});
+      setThumbnailUpload({ status: 'idle', progress: 0, error: '' });
     } catch (err) {
       setError(err.message || 'Failed to load course');
     }
@@ -426,17 +687,23 @@ const CourseEditorPage = ({ environment }) => {
       clearTimeout(saveTimeoutRef.current);
     }
     if (!dirty) return true;
+    const candidate = payload || course;
+    const videoIssues = computeVideoErrors(candidate);
+    if (Object.keys(videoIssues).length > 0) {
+      setVideoErrors(videoIssues);
+      setError('Please fix video URL validation errors before saving.');
+      setSaveState('error');
+      return false;
+    }
     if (!isSlugValid) {
       setSaveState('error');
       return false;
     }
     setSaveState('saving');
     try {
-      const saved = await api.updateCourse(courseId, payload || course);
+      const saved = await api.updateCourse(courseId, candidate);
       const normalized = normalizeCourse(saved);
-      setCourse(normalized);
-      setInitialCourse(normalized);
-      setDirty(false);
+      updateCourseWithInitial(normalized, normalized);
       setSaveState('saved');
       return true;
     } catch (err) {
@@ -447,22 +714,20 @@ const CourseEditorPage = ({ environment }) => {
   };
 
   const handleChange = (updated) => {
-    setCourse(updated);
-    const changed = initialCourse ? !deepEqual(initialCourse, updated) : true;
-    setDirty(changed);
+    updateCourseState(updated);
   };
 
   useEffect(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
-    if (dirty && isSlugValid) {
+    if (dirty && isSlugValid && Object.keys(videoErrors || {}).length === 0) {
       saveTimeoutRef.current = setTimeout(() => triggerSave(), 800);
     }
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [course, dirty, isSlugValid]);
+  }, [course, dirty, isSlugValid, videoErrors]);
 
   const navigationBlocker = useBlocker(() => dirty);
   useEffect(() => {
@@ -524,6 +789,150 @@ const CourseEditorPage = ({ environment }) => {
     }
   };
 
+  const handleThumbnailUpload = async (file) => {
+    if (!file) return;
+    setThumbnailUpload({ status: 'uploading', progress: 0, error: '' });
+    try {
+      const { url } = await uploadThumbnail(file, {
+        environment,
+        apiClient,
+        onProgress: (progress) => setThumbnailUpload((prev) => ({ ...prev, progress })),
+      });
+
+      let nextCourseState = course;
+      setCourse((prev) => {
+        const base = prev || {};
+        nextCourseState = { ...base, thumbnailUrl: url };
+        return nextCourseState;
+      });
+      refreshDirtyState(nextCourseState);
+
+      try {
+        await api.patchCourse(courseId, { thumbnailUrl: url });
+        const nextInitial = initialCourse ? { ...initialCourse, thumbnailUrl: url } : null;
+        if (nextInitial) {
+          updateCourseWithInitial(nextCourseState, nextInitial);
+        }
+      } catch (persistError) {
+        setError(persistError.message || 'Failed to persist thumbnail');
+      }
+
+      setThumbnailUpload({ status: 'success', progress: 100, error: '' });
+      showToast('Thumbnail uploaded', 'success');
+    } catch (err) {
+      const message = normalizeUploadError(err, THUMBNAIL_MAX_BYTES).message;
+      setThumbnailUpload({ status: 'error', progress: 0, error: message });
+      showToast(message, 'error');
+    }
+  };
+
+  const handleRemoveThumbnail = async () => {
+    let nextCourseState = course;
+    setCourse((prev) => {
+      const base = prev || {};
+      nextCourseState = { ...base, thumbnailUrl: '' };
+      return nextCourseState;
+    });
+    refreshDirtyState(nextCourseState);
+    try {
+      await api.patchCourse(courseId, { thumbnailUrl: '' });
+      const nextInitial = initialCourse ? { ...initialCourse, thumbnailUrl: '' } : null;
+      if (nextInitial) {
+        updateCourseWithInitial(nextCourseState, nextInitial);
+      }
+      showToast('Thumbnail removed', 'info');
+    } catch (err) {
+      setError(err.message || 'Failed to remove thumbnail');
+      showToast(err.message || 'Failed to remove thumbnail', 'error');
+    }
+  };
+
+  const updateAttachmentUpload = (lessonId, uploadId, attrs) => {
+    setAttachmentUploads((prev) => ({
+      ...prev,
+      [lessonId]: (prev[lessonId] || []).map((item) => (item.id === uploadId ? { ...item, ...attrs } : item)),
+    }));
+  };
+
+  const handleUploadAttachments = async (lessonId, files = []) => {
+    for (const file of files) {
+      const uploadId = `${lessonId}-${Date.now()}-${file.name}`;
+      setAttachmentUploads((prev) => ({
+        ...prev,
+        [lessonId]: [...(prev[lessonId] || []), { id: uploadId, name: file.name, progress: 0, status: 'uploading' }],
+      }));
+      try {
+        const { url } = await uploadAttachment(file, {
+          environment,
+          apiClient,
+          onProgress: (progress) => updateAttachmentUpload(lessonId, uploadId, { progress }),
+        });
+
+        let nextCourseState = course;
+        setCourse((prev) => {
+          const base = prev || { modules: [] };
+          nextCourseState = updateLessonInCourseData(base, lessonId, (lesson) => ({
+            ...lesson,
+            attachments: [...(lesson.attachments || []), url],
+          }));
+          return nextCourseState;
+        });
+        refreshDirtyState(nextCourseState);
+
+        const updatedLesson = findLessonInCourse(nextCourseState, lessonId);
+        try {
+          await api.updateLesson(lessonId, updatedLesson);
+          if (initialCourse) {
+            const nextInitial = updateLessonInCourseData(initialCourse, lessonId, (lesson) => ({
+              ...lesson,
+              attachments: [...(lesson.attachments || []), url],
+            }));
+            updateCourseWithInitial(nextCourseState, nextInitial);
+          }
+        } catch (persistError) {
+          setError(persistError.message || 'Failed to save attachment to lesson');
+          showToast(persistError.message || 'Failed to save attachment to lesson', 'error');
+        }
+
+        updateAttachmentUpload(lessonId, uploadId, { status: 'success', progress: 100 });
+        showToast('Attachment uploaded', 'success');
+      } catch (err) {
+        const message = normalizeUploadError(err, ATTACHMENT_MAX_BYTES).message;
+        updateAttachmentUpload(lessonId, uploadId, { status: 'error', error: message, progress: 0 });
+        showToast(message, 'error');
+      }
+    }
+  };
+
+  const handleRemoveAttachment = async (lessonId, url) => {
+    let nextCourseState = course;
+    setCourse((prev) => {
+      const base = prev || { modules: [] };
+      nextCourseState = updateLessonInCourseData(base, lessonId, (lesson) => ({
+        ...lesson,
+        attachments: (lesson.attachments || []).filter((item) => item !== url),
+      }));
+      return nextCourseState;
+    });
+    refreshDirtyState(nextCourseState);
+
+    const updatedLesson = findLessonInCourse(nextCourseState, lessonId);
+    try {
+      await api.updateLesson(lessonId, updatedLesson);
+      if (initialCourse) {
+        const nextInitial = updateLessonInCourseData(initialCourse, lessonId, (lesson) => ({
+          ...lesson,
+          attachments: (lesson.attachments || []).filter((item) => item !== url),
+        }));
+        updateCourseWithInitial(nextCourseState, nextInitial);
+      }
+      showToast('Attachment removed', 'info');
+    } catch (err) {
+      setError(err.message || 'Failed to remove attachment');
+      showToast(err.message || 'Failed to remove attachment', 'error');
+    }
+  };
+
   const fetchReplicate = async (env, search) => {
     setIsReplicateLoading(true);
     try {
@@ -551,8 +960,7 @@ const CourseEditorPage = ({ environment }) => {
   const handleSelectReplicate = (sourceCourse) => {
     const transformed = applyReplication(sourceCourse);
     const merged = { ...course, ...transformed, id: course.id };
-    setCourse(merged);
-    setDirty(true);
+    updateCourseState(merged);
     setReplicateOpen(false);
   };
 
@@ -610,10 +1018,24 @@ const CourseEditorPage = ({ environment }) => {
       </Tabs>
 
       <TabPanel value={activeTab} index={0}>
-        <BasicsTab course={course} onChange={handleChange} slugError={isSlugValid ? '' : 'Invalid slug'} />
+        <BasicsTab
+          course={course}
+          onChange={handleChange}
+          slugError={isSlugValid ? '' : 'Invalid slug'}
+          onThumbnailUpload={handleThumbnailUpload}
+          onRemoveThumbnail={handleRemoveThumbnail}
+          thumbnailUpload={thumbnailUpload}
+        />
       </TabPanel>
       <TabPanel value={activeTab} index={1}>
-        <CurriculumTab course={course} onChange={handleChange} />
+        <CurriculumTab
+          course={course}
+          onChange={handleChange}
+          onUploadAttachments={handleUploadAttachments}
+          onRemoveAttachment={handleRemoveAttachment}
+          attachmentUploads={attachmentUploads}
+          videoErrors={videoErrors}
+        />
       </TabPanel>
       <TabPanel value={activeTab} index={2}>
         <PricingTab course={course} onChange={handleChange} />
@@ -635,6 +1057,20 @@ const CourseEditorPage = ({ environment }) => {
         onEnvChange={setReplicateEnv}
         onSearch={setReplicateSearch}
       />
+
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={4000}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        onClose={(_, reason) => {
+          if (reason === 'clickaway') return;
+          setToast((prev) => ({ ...prev, open: false }));
+        }}
+      >
+        <Alert severity={toast.severity} onClose={() => setToast((prev) => ({ ...prev, open: false }))}>
+          {toast.message}
+        </Alert>
+      </Snackbar>
     </div>
   );
 };

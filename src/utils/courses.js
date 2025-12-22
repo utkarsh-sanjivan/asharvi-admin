@@ -24,7 +24,11 @@ const normalizeCourse = (course) => ({
   modules: (course?.modules || []).map((m) => ({
     lessons: [],
     ...m,
-    lessons: (m.lessons || []).map((l) => ({ ...l })),
+    lessons: (m.lessons || []).map((l) => ({
+      attachments: [],
+      ...l,
+      attachments: l.attachments || [],
+    })),
   })),
 });
 
