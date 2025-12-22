@@ -2,6 +2,8 @@ import { getApiBaseUrl, ENVIRONMENTS, getStoredEnvironment } from '../../config/
 import { getAuthConfig } from '../../config/auth';
 import { createApiClient } from '../../api/apiClientFactory';
 import { getCookie } from '../../utils/cookies';
+import { buildRequestHeaders } from '../../api/headers';
+import { parseRetryAfterHeader } from '../../api/errors';
 
 const DEFAULT_THUMBNAIL_PATH = '/admin/uploads/thumbnail';
 const DEFAULT_ATTACHMENT_PATH = '/admin/uploads/attachment';
@@ -34,10 +36,20 @@ const normalizeUploadError = (error, maxSize) => {
   if (status === 413) {
     return new UploadError(`File is too large. Maximum size is ${formatBytes(maxSize)}.`, status);
   }
+  if (status === 429) {
+    const retryAfterText = error?.retryAfterMs
+      ? ` Try again in ${Math.ceil(error.retryAfterMs / 1000)}s.`
+      : ' Please slow down and retry.';
+    const uploadError = new UploadError(`Rate limited.${retryAfterText}`, status);
+    uploadError.retryAfterMs = error?.retryAfterMs || null;
+    return uploadError;
+  }
   const payload = error?.response?.data || {};
   const serverMessage =
     payload?.error?.message || payload?.message || error?.message || 'Upload failed. Please try again.';
-  return new UploadError(serverMessage, status);
+  const uploadError = new UploadError(serverMessage, status);
+  uploadError.retryAfterMs = error?.retryAfterMs || null;
+  return uploadError;
 };
 
 const resolveEnvironment = (env) => {
@@ -54,7 +66,16 @@ const parseJsonSafely = (text) => {
   }
 };
 
-const performUpload = ({ baseURL, path, file, onProgress, maxSize, refreshableClient, attempt = 0 }) =>
+const performUpload = ({
+  baseURL,
+  path,
+  file,
+  onProgress,
+  maxSize,
+  refreshableClient,
+  attempt = 0,
+  environment,
+}) =>
   new Promise((resolve, reject) => {
     const url = path.startsWith('http') ? path : `${baseURL}${path}`;
     const xhr = new XMLHttpRequest();
@@ -65,6 +86,10 @@ const performUpload = ({ baseURL, path, file, onProgress, maxSize, refreshableCl
     if (token) {
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     }
+    const auditHeaders = buildRequestHeaders({ environment, includeContentType: false });
+    Object.entries(auditHeaders).forEach(([key, value]) => {
+      xhr.setRequestHeader(key, value);
+    });
 
     xhr.upload.onprogress = (event) => {
       if (!onProgress || !event?.lengthComputable) return;
@@ -73,7 +98,8 @@ const performUpload = ({ baseURL, path, file, onProgress, maxSize, refreshableCl
     };
 
     xhr.onerror = () => {
-      reject(normalizeUploadError({ status: xhr.status }, maxSize));
+      const retryAfterMs = parseRetryAfterHeader(xhr.getResponseHeader('Retry-After'));
+      reject(normalizeUploadError({ status: xhr.status, retryAfterMs }, maxSize));
     };
 
     xhr.onload = async () => {
@@ -92,7 +118,10 @@ const performUpload = ({ baseURL, path, file, onProgress, maxSize, refreshableCl
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(payload);
       } else {
-        reject(normalizeUploadError({ status: xhr.status, response: { data: payload } }, maxSize));
+        const retryAfterMs = parseRetryAfterHeader(xhr.getResponseHeader('Retry-After'));
+        reject(
+          normalizeUploadError({ status: xhr.status, response: { data: payload }, retryAfterMs }, maxSize)
+        );
       }
     };
 
@@ -112,6 +141,7 @@ const createUploadClient = (environment, apiClient) => {
       getAccessToken: () => getCookie('access_token'),
       onAuthFailure: () => {},
       authPaths,
+      environment: env,
     });
 
   const uploadThumbnail = (file, onProgress) =>
@@ -122,6 +152,7 @@ const createUploadClient = (environment, apiClient) => {
       onProgress,
       maxSize: THUMBNAIL_MAX_BYTES,
       refreshableClient,
+      environment: env,
     });
 
   const uploadAttachment = (file, onProgress) =>
@@ -132,6 +163,7 @@ const createUploadClient = (environment, apiClient) => {
       onProgress,
       maxSize: ATTACHMENT_MAX_BYTES,
       refreshableClient,
+      environment: env,
     });
 
   const extractUrl = (payload) => {

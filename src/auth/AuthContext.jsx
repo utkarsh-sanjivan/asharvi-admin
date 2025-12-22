@@ -4,6 +4,7 @@ import { getAuthConfig } from '../config/auth';
 import { ENVIRONMENTS, getApiBaseUrl, getStoredEnvironment, setStoredEnvironment } from '../config/environment';
 import { getCookie } from '../utils/cookies';
 import { decodeJwt } from '../utils/jwt';
+import { logEvent } from '../features/diagnostics/diagnosticsStore';
 
 const AuthContext = createContext(null);
 
@@ -19,6 +20,19 @@ const AuthProvider = ({ children }) => {
   const handleAuthFailure = () => {
     setIsAuthenticated(false);
     setUser(null);
+    logEvent('LOGOUT');
+  };
+
+  const handleApiErrorLog = (error, path) => {
+    if (error?.status === 401) {
+      logEvent('API_401', { path });
+    }
+    if (error?.status === 403) {
+      logEvent('API_403', { path });
+    }
+    if (error?.status === 429) {
+      logEvent('API_429', { path, retryAfterMs: error?.retryAfterMs });
+    }
   };
 
   const apiClient = useMemo(() => {
@@ -28,6 +42,8 @@ const AuthProvider = ({ children }) => {
       getAccessToken,
       onAuthFailure: handleAuthFailure,
       authPaths,
+      environment,
+      onApiError: handleApiErrorLog,
     });
   }, [environment, authPaths]);
 
@@ -41,6 +57,7 @@ const AuthProvider = ({ children }) => {
     }
 
     try {
+      logEvent('REFRESH_START');
       const response = await apiClient.get(authPaths.mePath);
       const payload = response?.data;
       if (payload) {
@@ -49,6 +66,7 @@ const AuthProvider = ({ children }) => {
           roles: payload.roles || [],
         });
         setIsAuthenticated(true);
+        logEvent('REFRESH_SUCCESS');
         return true;
       }
     } catch (error) {
@@ -60,8 +78,10 @@ const AuthProvider = ({ children }) => {
           roles,
         });
         setIsAuthenticated(true);
+        logEvent('REFRESH_SUCCESS');
         return true;
       }
+      logEvent('REFRESH_FAIL', { status: error?.status });
     }
 
     setIsAuthenticated(false);
@@ -70,8 +90,14 @@ const AuthProvider = ({ children }) => {
   };
 
   const login = async (email, password) => {
-    await apiClient.login({ email, password });
-    await refreshSession();
+    try {
+      await apiClient.login({ email, password });
+      logEvent('LOGIN_SUCCESS');
+      await refreshSession();
+    } catch (error) {
+      logEvent('LOGIN_FAIL', { status: error?.status });
+      throw error;
+    }
   };
 
   const logout = async () => {
@@ -88,6 +114,7 @@ const AuthProvider = ({ children }) => {
     const normalized = env === ENVIRONMENTS.production ? ENVIRONMENTS.production : ENVIRONMENTS.staging;
     setStoredEnvironment(normalized);
     setEnvironment(normalized);
+    logEvent('ENV_CHANGED', { environment: normalized });
     handleAuthFailure();
   };
 

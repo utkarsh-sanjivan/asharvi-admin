@@ -1,12 +1,16 @@
 import { ApiError, makeRequest } from './request';
+import { resolveEnvironmentValue } from './errors';
 
-const createApiClient = ({ baseUrl, getAccessToken, onAuthFailure, authPaths }) => {
+const createApiClient = ({ baseUrl, getAccessToken, onAuthFailure, authPaths, environment, onApiError }) => {
   let refreshPromise = null;
+  const resolvedEnv = resolveEnvironmentValue(environment);
 
   const callRequest = (path, options = {}) =>
     makeRequest(baseUrl, path, {
       ...options,
+      environment: resolvedEnv,
       getAccessToken,
+      onApiError,
     });
 
   const refreshAccessToken = async () => {
