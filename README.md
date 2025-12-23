@@ -47,6 +47,7 @@ Asharvi Admin is a React + Vite single-page application prepared for GitHub Page
 ### GitHub Pages setup (one-time)
 1. Repository **Settings → Pages → Build and deployment → Source: Deploy from a branch**.
 2. Branch: **`gh-pages`**; Folder: **`/ (root)`**.
+3. The repository includes `.github/pages.yml` to track this configuration in source control.
 
 ### Deployed URL
 The site is served from `https://<org>.github.io/asharvi-admin/`.
