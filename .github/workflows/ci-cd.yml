@@ -34,6 +34,15 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          VITE_API_BASE_URL_STAGING: ${{ secrets.VITE_API_BASE_URL_STAGING }}
+          VITE_API_BASE_URL_PROD: ${{ secrets.VITE_API_BASE_URL_PROD }}
+          VITE_AUTH_LOGIN_PATH: /auth/login
+          VITE_AUTH_REFRESH_PATH: /auth/refresh
+          VITE_AUTH_LOGOUT_PATH: /auth/logout
+          VITE_AUTH_ME_PATH: /auth/me
+          VITE_UPLOAD_THUMBNAIL_PATH: /admin/uploads/thumbnail
+          VITE_UPLOAD_ATTACHMENT_PATH: /admin/uploads/attachment
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
