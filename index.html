@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asharvi Admin</title>
+    <script type="text/javascript">
+      (function (l) {
+        if (l.search[1] === '/') {
+          const decoded = l.search
+            .slice(1)
+            .split('&')
+            .map(function (s) {
+              return s.replace(/~and~/g, '&');
+            })
+            .join('?');
+          l.replace(l.pathname.slice(0, -1) + decoded + l.hash);
+        }
+      })(window.location);
+    </script>
+    <script type="module" crossorigin src="/asharvi-admin/assets/index-amnSxzpl.js"></script>
+    <link rel="stylesheet" crossorigin href="/asharvi-admin/assets/index-Z1v-cIcb.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
